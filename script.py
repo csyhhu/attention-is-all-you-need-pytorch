@@ -1,4 +1,4 @@
-from train import prepare_dataloaders
+from train import prepare_dataloaders, patch_src, patch_trg
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -8,7 +8,7 @@ parser.add_argument('-train_path', default=None)   # bpe encoded data
 parser.add_argument('-val_path', default=None)     # bpe encoded data
 
 parser.add_argument('-epoch', type=int, default=10)
-parser.add_argument('-b', '--batch_size', type=int, default=2048)
+parser.add_argument('-b', '--batch_size', type=int, default=10)
 
 parser.add_argument('-d_model', type=int, default=512)
 parser.add_argument('-d_inner_hid', type=int, default=2048)
@@ -36,7 +36,18 @@ device = 'cpu'
 
 training_data, validation_data = prepare_dataloaders(opt, device)
 
+from seq2seq.RecurrentSeq2Seq import Encoder, Decoder, Seq2Seq
+
+encoder = Encoder(input_dim=opt.src_vocab_size)
+decoder = Decoder(output_dim=opt.trg_vocab_size)
+model = Seq2Seq(encoder, decoder, device)
+
 for batch in training_data:
     src = batch.src # [seq_src, bs]
     trg = batch.trg # [seq_trg, bs]
+
+    src_seq = patch_src(batch.src, opt.src_pad_idx).to(device)
+    trg_seq, gold = map(lambda x: x.to(device), patch_trg(batch.trg, opt.trg_pad_idx))
     break
+
+outputs = model(src, trg)

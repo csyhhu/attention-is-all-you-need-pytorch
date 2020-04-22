@@ -2,6 +2,8 @@ import os
 import time
 import sys
 
+import torch.nn as nn
+
 _, term_width = os.popen('stty size', 'r').read().split()
 term_width = int(term_width)
 
@@ -51,3 +53,25 @@ def progress_bar(current, total, msg=None):
     else:
         sys.stdout.write('\n')
     sys.stdout.flush()
+
+
+def count_parameters(model: nn.Module):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = float(self.sum) / float(self.count)

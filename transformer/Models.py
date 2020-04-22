@@ -173,3 +173,21 @@ class Transformer(nn.Module):
         seq_logit = self.trg_word_prj(dec_output) * self.x_logit_scale
 
         return seq_logit.view(-1, seq_logit.size(2))
+
+
+if __name__ == '__main__':
+
+    from train import patch_trg, patch_src
+    n_src_vocab = 100
+    n_trg_vocab = 110
+    src_pad_idx = 0
+    trg_pad_idx = 0
+    max_len = 28
+    batch_size = 12
+    model = Transformer(n_src_vocab=n_src_vocab, n_trg_vocab=n_trg_vocab, src_pad_idx=src_pad_idx, trg_pad_idx=trg_pad_idx)
+
+    src = torch.randint(low=0, high=n_src_vocab, size=(max_len, batch_size))
+    trg = torch.randint(low=0, high=n_src_vocab, size=(max_len, batch_size))
+    src_seq = patch_src(src, src_pad_idx) # [batch_size, max_len]
+    trg_seq, gold = map(lambda x: x, patch_trg(trg, trg_pad_idx)) # [batch_size, max_len-1] [(max_len - 1) * batch_size]
+    outputs = model(src_seq, trg_seq) # [(max_len - 1) * batch_size, n_trg_vocab]

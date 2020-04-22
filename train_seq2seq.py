@@ -2,42 +2,38 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from utils.miscellaneous import progress_bar
-from train import prepare_dataloaders
-from seq2seq.model import Seq2Seq, Attention, Encoder, Decoder
+from utils.miscellaneous import progress_bar, count_parameters
+from utils.recorder import Recorder
+from utils.dataset import get_dataloader, prepare_dataloaders
+from utils.train import evaluate
+
+from seq2seq.RecurrentSeq2Seq import RecSeq2Seq
+from seq2seq.AttenSeq2Seq import AttenSeq2Seq
+from seq2seq.Transformer import Transformer
 
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-data_pkl', default='./m30k_deen_shr.pkl')     # all-in-1 data pickle or bpe field
+parser.add_argument('--model_name', '-model', type=str, default='rec')
+parser.add_argument('--dataset_name', '-dataset', type=str, default='Multi30k')
+parser.add_argument('--data_pkl', '-data_pkl', default='m30k_deen_shr.pkl')
+parser.add_argument('--batch_size', '-b', type=int, default=128)
+# ------------------
+# Model Arch Arguments
+# ------------------
+parser.add_argument('-enc_dim', type=int, default=256)
+parser.add_argument('-dec_dim', type=int, default=256)
+parser.add_argument('-hidden_size', type=int, default=512)
+parser.add_argument('-enc_dropout', type=float, default=0.5)
+parser.add_argument('-dec_dropout', type=float, default=0.5)
+# ------------------
+# Training Arguments
+# ------------------
+parser.add_argument('-clip', type=float, default=1.0)
+parser.add_argument('-epoch', type=int, default=10)
+# parser.add_argument('-embs_share_weight', action='store_true')
 
-parser.add_argument('-train_path', default=None)   # bpe encoded data
-parser.add_argument('-val_path', default=None)     # bpe encoded data
-
-parser.add_argument('-epoch', '-epoch', type=int, default=10)
-parser.add_argument('-b', '--batch_size', type=int, default=2048)
-
-parser.add_argument('-d_model', type=int, default=512)
-parser.add_argument('-d_inner_hid', type=int, default=2048)
-parser.add_argument('-d_k', type=int, default=64)
-parser.add_argument('-d_v', type=int, default=64)
-
-parser.add_argument('-n_head', type=int, default=8)
-parser.add_argument('-n_layers', type=int, default=6)
-parser.add_argument('-warmup','--n_warmup_steps', type=int, default=4000)
-
-parser.add_argument('-dropout', type=float, default=0.1)
-parser.add_argument('-embs_share_weight', action='store_true')
-parser.add_argument('-proj_share_weight', action='store_true')
-
-parser.add_argument('-log', default=None)
-parser.add_argument('-save_model', default=None)
-parser.add_argument('-save_mode', type=str, choices=['all', 'best'], default='best')
-
-parser.add_argument('-no_cuda', action='store_true')
-parser.add_argument('-label_smoothing', action='store_true')
-
-opt = parser.parse_args()
+args = parser.parse_args()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # -------------------
@@ -45,44 +41,66 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # ------------
 # Load Dataset
 # ------------
-training_data, validation_data = prepare_dataloaders(opt, device)
+# train_loader, eval_loader, test_loader, SRC, TRG = \
+#     get_dataloader(dataset_name=args.dataset_name, batch_size=args.batch_size, device=device)
+train_loader, test_loader = prepare_dataloaders(args, device)
+
+src_vocab_size = args.src_vocab_size
+trg_vocab_size = args.trg_vocab_size
+src_ignore_index = args.src_pad_idx
+trg_ignore_index = args.trg_pad_idx
 
 # ----------------
 # Initialize Model
 # ----------------
-INPUT_DIM = opt.src_vocab_size
-OUTPUT_DIM = opt.trg_vocab_size
-ENC_EMB_DIM = 32
-DEC_EMB_DIM = 32
-ENC_HID_DIM = 64
-DEC_HID_DIM = 64
-ATTN_DIM = 8
-ENC_DROPOUT = 0.5
-DEC_DROPOUT = 0.5
-
-enc = Encoder(INPUT_DIM, ENC_EMB_DIM, ENC_HID_DIM, DEC_HID_DIM, ENC_DROPOUT)
-attn = Attention(ENC_HID_DIM, DEC_HID_DIM, ATTN_DIM)
-dec = Decoder(OUTPUT_DIM, DEC_EMB_DIM, ENC_HID_DIM, DEC_HID_DIM, DEC_DROPOUT, attn)
-model = Seq2Seq(enc, dec, device).to(device)
-criterion = nn.CrossEntropyLoss(ignore_index=opt.trg_pad_idx)
-
-optimizer = optim.Adam(model.parameters())
-
-def count_parameters(model: nn.Module):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+if args.model_name == 'rec':
+    model = RecSeq2Seq(
+        input_dim=src_vocab_size, output_dim=trg_vocab_size,
+        enc_emb_dim=args.enc_emb_dim, dec_emb_dim=args.dec_emb_dim,
+        enc_hidden_dim=args.enc_hidden_dim, dec_hidden_dim=args.dec_hidden_dim,
+        enc_dropout=args.enc_dropout, dec_dropout=args.dec_dropout, device=device
+    )
+elif args.model_name == 'atten':
+    model = AttenSeq2Seq(
+        input_dim=src_vocab_size, output_dim=trg_vocab_size,
+        enc_emb_dim=args.enc_emb_dim, dec_emb_dim=args.dec_emb_dim,
+        enc_hidden_dim=args.enc_hidden_dim, dec_hidden_dim=args.dec_hidden_dim,
+        enc_dropout=args.enc_dropout, dec_dropout=args.dec_dropout, device=device
+    )
+elif args.model_name == 'transformer':
+    model = Transformer(
+        input_dim=src_vocab_size, output_dim=trg_vocab_size, src_pad_idx=src_ignore_index, trg_pad_idx=trg_ignore_index,
+        hidden_dim=args.enc_hidden_dim,
+        enc_dropout=args.enc_dropout, dec_dropout=args.dec_dropout, device=device
+    )
+else:
+    raise NotImplementedError
 
 print(f'The model has {count_parameters(model):,} trainable parameters')
+
+# -----------
+# Initialize Criterion and Optimizer
+# -----------
+criterion = nn.CrossEntropyLoss(ignore_index=trg_ignore_index)
+optimizer = optim.Adam(model.parameters())
+
+# -----
+# Initialize Recorder
+# -----
+SummaryPath = './Reults/Seq2Seq/%s/runs' %(args.model_name)
+recoder = Recorder(SummaryPath)
+if recoder is not None:
+    recoder.write_arguments([args])
 
 # --------------
 # Begin Training
 # --------------
-clip = 1
-for epoch_idx in range(opt.epoch):
+for epoch_idx in range(args.epoch):
 
     model.train()
 
     train_loss = 0
-    for batch_idx, batch in enumerate(training_data):
+    for batch_idx, batch in enumerate(train_loader):
         src = batch.src
         trg = batch.trg
 
@@ -90,20 +108,42 @@ for epoch_idx in range(opt.epoch):
 
         output = model(src, trg)
 
-        output = output[1:].view(-1, output.shape[-1])
+        # trg = [trg len, batch size]
+        # output = [trg len, batch size, output dim]
+
+        output_dim = output.shape[-1]
+
+        output = output[1:].view(-1, output_dim)
         trg = trg[1:].view(-1)
+
+        # trg = [(trg len - 1) * batch size]
+        # output = [(trg len - 1) * batch size, output dim]
 
         losses = criterion(output, trg)
 
         losses.backward()
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
         optimizer.step()
 
         # ------
         # Record
         # ------
-        train_loss += losses.item()
+        if recoder is not None:
+            recoder.update(losses.item(), batch_size=args.batch_size, cur_lr=optimizer.param_groups[0]['lr'])
+            recoder.print_training_result(batch_idx, len(train_loader))
+        else:
+            train_loss += losses.item()
+            progress_bar(batch_idx, len(train_loader), "Loss: %.3f" %(train_loss / (batch_idx + 1)))
 
-        progress_bar(batch_idx, len(training_data), train_loss / (batch_idx + 1))
+    # -----
+    # Test
+    # -----
+    eval_loss = evaluate(model, test_loader, criterion)
+    if recoder is not None:
+        recoder.update(eval_loss, is_train=False)
+    print('[%2d] Test loss: %.3f' % (epoch_idx, eval_loss))
+
+if recoder is not None:
+    recoder.close()

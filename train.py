@@ -25,7 +25,7 @@ def cal_performance(pred, gold, trg_pad_idx, smoothing=False):
 
     loss = cal_loss(pred, gold, trg_pad_idx, smoothing=smoothing)
 
-    pred = pred.max(1)[1]
+    pred = pred.max(1)[1] # max return a tuple
     gold = gold.contiguous().view(-1)
     non_pad_mask = gold.ne(trg_pad_idx)
     n_correct = pred.eq(gold).masked_select(non_pad_mask).sum().item()
@@ -55,12 +55,12 @@ def cal_loss(pred, gold, trg_pad_idx, smoothing=False):
     return loss
 
 
-def patch_src(src, pad_idx):
+def patch_src(src, pad_idx=0):
     src = src.transpose(0, 1)
     return src
 
 
-def patch_trg(trg, pad_idx):
+def patch_trg(trg, pad_idx=0):
     trg = trg.transpose(0, 1)
     trg, gold = trg[:, :-1], trg[:, 1:].contiguous().view(-1)
     return trg, gold
